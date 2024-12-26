@@ -1,12 +1,11 @@
 package com.demo.standardcrud.controller;
 
-import static org.springframework.hateoas.server.mvc.WebMvcLinkBuilder.*;
-
 import java.util.List;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
-import org.springframework.hateoas.EntityModel;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -23,6 +22,7 @@ import com.demo.standardcrud.dto.ApiResponse;
 import com.demo.standardcrud.dto.UserDTO;
 import com.demo.standardcrud.service.UserService;
 
+import jakarta.persistence.EntityNotFoundException;
 import jakarta.validation.Valid;
 
 @RestController
@@ -34,42 +34,122 @@ public class UserController {
 
     @GetMapping
     public ResponseEntity<ApiResponse<List<UserDTO>>> getAllUsers() {
-        List<UserDTO> users = userService.getAllUsers();
-        return ResponseEntity.ok(new ApiResponse<>(true, users, "Users fetched successfully"));
+        try {
+            List<UserDTO> users = userService.getAllUsers();
+            
+            if (users.isEmpty()) {
+                return ResponseEntity.ok(new ApiResponse<>(true, users, "No users found."));
+            }
+            
+            return ResponseEntity.ok(new ApiResponse<>(true, users, "Users fetched successfully"));
+        } catch (DataAccessException e) {
+            if (e.getMessage().contains("Table 'standardcrud.users' doesn't exist")) {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .body(new ApiResponse<>(false, null, "Database table 'users' doesn't exist."));
+            }
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(false, null, "An error occurred while fetching users."));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(false, null, "An unexpected error occurred."));
+        }
     }
+
 
     @GetMapping("/paginated")
     public ResponseEntity<ApiResponse<Page<UserDTO>>> getAllUsersPaginated(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size) {
-        Page<UserDTO> users = userService.getAllUsersPaginated(page, size);
-        return ResponseEntity.ok(new ApiResponse<>(true, users, "Users fetched successfully"));
+        try {
+            if (page < 0 || size <= 0) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(new ApiResponse<>(false, null, "Page number and size must be positive."));
+            }
+
+            Page<UserDTO> users = userService.getAllUsersPaginated(page, size);
+            
+            if (users.isEmpty()) {
+                return ResponseEntity.ok(new ApiResponse<>(true, users, "No users found."));
+            }
+
+            return ResponseEntity.ok(new ApiResponse<>(true, users, "Users fetched successfully"));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(false, null, "An unexpected error occurred while fetching users."));
+        }
     }
 
     @GetMapping("/{id}")
-    public EntityModel<UserDTO> getUserById(@PathVariable Long id) {
-        UserDTO userDTO = userService.getUserById(id);
-        return EntityModel.of(userDTO,
-                linkTo(methodOn(UserController.class).getUserById(id)).withSelfRel(),
-                linkTo(methodOn(UserController.class).getAllUsers()).withRel("all-users"));
+    public ResponseEntity<ApiResponse<UserDTO>> getUserById(@PathVariable Long id) {
+        try {
+            UserDTO userDTO = userService.getUserById(id);
+            
+            if (userDTO == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(new ApiResponse<>(false, null, "User with ID " + id + " not found."));
+            }
+            
+            return ResponseEntity.ok(new ApiResponse<>(true, userDTO, "User fetched successfully"));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(false, null, "An unexpected error occurred while fetching the user."));
+        }
     }
+
 
     @PostMapping
     public ResponseEntity<ApiResponse<UserDTO>> createUser(@Valid @RequestBody UserDTO userDTO) {
-        UserDTO createdUser = userService.createUser(userDTO);
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(new ApiResponse<>(true, createdUser, "User created successfully"));
+        try {
+            UserDTO createdUser = userService.createUser(userDTO);
+            return ResponseEntity.status(HttpStatus.CREATED)
+                    .body(new ApiResponse<>(true, createdUser, "User created successfully"));
+        } catch (DataIntegrityViolationException e) {
+            if (e.getMessage().contains("Duplicate entry")) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(new ApiResponse<>(false, null, "A user with this email already exists."));
+            }
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ApiResponse<>(false, null, "Data integrity violation occurred."));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(false, null, "An unexpected error occurred."));
+        }
     }
+
 
     @PutMapping("/{id}")
     public ResponseEntity<ApiResponse<UserDTO>> updateUser(@PathVariable Long id, @Valid @RequestBody UserDTO userDTO) {
-        UserDTO updatedUser = userService.updateUser(id, userDTO);
-        return ResponseEntity.ok(new ApiResponse<>(true, updatedUser, "User updated successfully"));
+        try {
+            UserDTO updatedUser = userService.updateUser(id, userDTO);
+            return ResponseEntity.ok(new ApiResponse<>(true, updatedUser, "User updated successfully"));
+        } catch (EntityNotFoundException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(new ApiResponse<>(false, null, "User with ID " + id + " not found."));
+        } catch (DataIntegrityViolationException e) {
+            if (e.getMessage().contains("Duplicate entry")) {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                        .body(new ApiResponse<>(false, null, "A user with this email already exists."));
+            }
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(new ApiResponse<>(false, null, "Data integrity violation occurred during user update."));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(false, null, "An unexpected error occurred while updating the user."));
+        }
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiResponse<Void>> deleteUser(@PathVariable Long id) {
-        userService.deleteUser(id);
-        return ResponseEntity.noContent().build();
+        try {
+            userService.deleteUser(id);
+            return ResponseEntity.noContent().build();
+        } catch (EntityNotFoundException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(new ApiResponse<>(false, null, "User with ID " + id + " not found."));
+        } catch (RuntimeException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ApiResponse<>(false, null, "An unexpected error occurred while deleting the user."));
+        }
     }
+
 }
